@@ -1,0 +1,93 @@
+project:
+  name: debrecen-weather-calibration
+  city: Debrecen
+  country: Hungary
+  timezone: Europe/Budapest
+
+station:
+  name: Debrecen International Airport
+  icao: LHDC
+  wmo: "12882"
+  meteostat_id: "12882"
+  latitude: 47.4833
+  longitude: 21.6000
+  elevation_m: 108
+  airport_aip_coordinate: "472920N 0213655E"
+
+paths:
+  observations_raw: data/raw/observations/debrecen_lhdc_observations.csv
+  forecasts_raw: data/raw/forecasts/debrecen_model_forecasts.csv
+  aligned: data/interim/debrecen_aligned.csv
+  features: data/processed/debrecen_features.csv
+  predictions: data/processed/debrecen_predictions.csv
+  model_bundle: data/processed/debrecen_temperature_2m_model.joblib
+  metrics: reports/metrics.csv
+  report_html: reports/debrecen_forecast_calibration_report.html
+  figures_dir: reports/figures
+  site_dir: site
+
+forecast:
+  models:
+    - icon_eu
+    - ecmwf_ifs025
+    - gfs_global
+    - meteofrance_arpege_europe
+  lead_hours: [1, 3, 6, 12, 24, 36, 48]
+  hourly_variables:
+    - temperature_2m
+    - dew_point_2m
+    - relative_humidity_2m
+    - pressure_msl
+    - wind_speed_10m
+    - wind_direction_10m
+    - wind_gusts_10m
+    - precipitation
+    - cloud_cover
+    - cape
+
+real_data:
+  source: api
+  observation_provider: iem_asos
+  forecast_provider: open_meteo_previous_runs
+  history_days: 180
+  data_lag_days: 7
+  start_date:
+  end_date:
+  previous_run_days: [1, 2]
+  forecast_variables:
+    - temperature_2m
+    - dew_point_2m
+    - relative_humidity_2m
+    - pressure_msl
+    - wind_speed_10m
+    - wind_direction_10m
+    - wind_gusts_10m
+    - precipitation
+    - cloud_cover
+  request_pause_seconds: 1.1
+
+training:
+  target: temperature_2m
+  quantiles: [0.05, 0.1, 0.5, 0.9, 0.95]
+  interval_low: 0.1
+  interval_high: 0.9
+  test_fraction: 0.2
+  validation_fraction: 0.2
+  random_seed: 42
+  max_train_rows: 50000
+  min_group_size_for_conformal: 80
+  conformal_group_columns:
+    - lead_bucket
+    - regime
+
+events:
+  frost_c: 0
+  warm_day_c: 30
+  hot_day_c: 35
+  high_wind_ms: 10
+  strong_gust_ms: 15
+  fog_visibility_m: 1000
+
+sample_data:
+  days: 180
+  start: "2024-01-01T00:00:00Z"
