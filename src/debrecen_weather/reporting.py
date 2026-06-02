@@ -145,7 +145,7 @@ def write_html_report(cfg: dict, figure_paths: list[Path] | None = None) -> Path
     metric_cards = _metric_cards(metrics)
     metric_sections = _metric_section_html(metrics)
     image_html = "\n".join(
-        f'<section><h2>{escape(path.stem.replace("_", " ").title())}</h2>'
+        f'<section class="figure-section"><h2>{escape(path.stem.replace("_", " ").title())}</h2>'
         f'<img src="{escape(_relative_image(path, report_path))}" alt="{escape(path.stem)}"></section>'
         for path in figure_paths
     )
@@ -168,7 +168,8 @@ def write_html_report(cfg: dict, figure_paths: list[Path] | None = None) -> Path
     table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
     th, td {{ border-bottom: 1px solid #e5ebef; padding: 8px 9px; text-align: left; }}
     th {{ color: #344955; }}
-    .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }}
+    .figures {{ display: block; }}
+    .figure-section {{ width: 100%; }}
     .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }}
     .card {{ border: 1px solid #dce5ea; border-radius: 6px; padding: 12px; background: #fbfcfd; }}
     .card span {{ display: block; color: #5d6b74; font-size: 12px; margin-bottom: 5px; }}
@@ -191,7 +192,7 @@ def write_html_report(cfg: dict, figure_paths: list[Path] | None = None) -> Path
       {metric_cards}
       {metric_sections}
     </section>
-    <div class="grid">
+    <div class="figures">
       {image_html}
     </div>
   </main>
