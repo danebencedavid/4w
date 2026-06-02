@@ -5,6 +5,7 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from .config import ensure_parent, resolve_path
@@ -12,6 +13,110 @@ from .config import ensure_parent, resolve_path
 
 def _relative_image(path: Path, report_path: Path) -> str:
     return path.resolve().relative_to(report_path.parent.resolve()).as_posix()
+
+
+def _clean_metric_table(df: pd.DataFrame, columns: list[str]) -> str:
+    """Render a compact metric table without noisy NaN cells."""
+    if df.empty:
+        return "<p>No rows available.</p>"
+    keep = [column for column in columns if column in df.columns]
+    display = df[keep].copy()
+    for column in display.select_dtypes(include=[np.number]).columns:
+        display[column] = display[column].round(3)
+    display = display.replace({np.nan: "", "NaN": ""})
+    return display.to_html(index=False, classes="metrics", border=0)
+
+
+def _metric_section_html(metrics: pd.DataFrame) -> str:
+    """Create user-facing metric tables from the long metrics CSV."""
+    if metrics.empty:
+        return "<p>No metrics were generated.</p>"
+
+    headline = metrics[
+        (metrics.get("model", "") == "all")
+        & (metrics.get("lead_bucket", "") == "all")
+        & (metrics.get("regime", "") == "all")
+        & metrics.get("split", "").isin(["validation", "test"])
+        & metrics.get("forecast", "").isin(["raw", "calibrated_median", "q10_q90", "conformal_interval"])
+    ].copy()
+    headline_html = _clean_metric_table(
+        headline,
+        [
+            "split",
+            "forecast",
+            "n",
+            "mae",
+            "rmse",
+            "bias",
+            "mae_skill_vs_raw",
+            "coverage",
+            "interval_width",
+            "mean_conformal_adjustment",
+        ],
+    )
+
+    model_rows = metrics[
+        (metrics.get("split", "") == "test")
+        & (metrics.get("model", "") != "all")
+        & (metrics.get("lead_bucket", "") == "all")
+        & (metrics.get("regime", "") == "all")
+        & metrics.get("forecast", "").isin(["raw", "calibrated_median"])
+    ].copy()
+    model_html = _clean_metric_table(
+        model_rows,
+        ["model", "forecast", "n", "mae", "rmse", "bias", "mae_skill_vs_raw"],
+    )
+
+    event_rows = metrics[metrics.get("forecast", "") == "event_probability"].copy()
+    event_html = _clean_metric_table(
+        event_rows,
+        ["split", "event", "threshold", "n", "base_rate", "brier_score", "mean_probability"],
+    )
+
+    return f"""
+      <h2>Headline Metrics</h2>
+      {headline_html}
+      <h2>Test Metrics By Model</h2>
+      {model_html}
+      <h2>Event Probabilities</h2>
+      {event_html}
+    """
+
+
+def _metric_cards(metrics: pd.DataFrame) -> str:
+    if metrics.empty:
+        return ""
+    selector = (
+        (metrics.get("split", "") == "test")
+        & (metrics.get("model", "") == "all")
+        & (metrics.get("lead_bucket", "") == "all")
+        & (metrics.get("regime", "") == "all")
+    )
+    test = metrics[selector]
+
+    def value_for(forecast: str, column: str) -> float | None:
+        row = test[test.get("forecast", "") == forecast]
+        if row.empty or column not in row:
+            return None
+        value = row.iloc[0][column]
+        return None if pd.isna(value) else float(value)
+
+    cards = {
+        "Raw Test MAE": value_for("raw", "mae"),
+        "Calibrated Test MAE": value_for("calibrated_median", "mae"),
+        "MAE Skill vs Raw": value_for("calibrated_median", "mae_skill_vs_raw"),
+        "Conformal Coverage": value_for("conformal_interval", "coverage"),
+        "Conformal Width": value_for("conformal_interval", "interval_width"),
+    }
+    card_html = []
+    for label, value in cards.items():
+        shown = "" if value is None else f"{value:.3f}"
+        if label == "MAE Skill vs Raw" and value is not None:
+            shown = f"{100 * value:.1f}%"
+        if label == "Conformal Coverage" and value is not None:
+            shown = f"{100 * value:.1f}%"
+        card_html.append(f'<div class="card"><span>{escape(label)}</span><strong>{escape(shown)}</strong></div>')
+    return f'<div class="cards">{"".join(card_html)}</div>'
 
 
 def write_html_report(cfg: dict, figure_paths: list[Path] | None = None) -> Path:
@@ -37,7 +142,8 @@ def write_html_report(cfg: dict, figure_paths: list[Path] | None = None) -> Path
             "Test end": str(pd.to_datetime(predictions.loc[predictions["split"] == "test", "valid_time_utc"]).max()),
         }
 
-    metric_preview = metrics.head(30).to_html(index=False, classes="metrics", border=0) if not metrics.empty else ""
+    metric_cards = _metric_cards(metrics)
+    metric_sections = _metric_section_html(metrics)
     image_html = "\n".join(
         f'<section><h2>{escape(path.stem.replace("_", " ").title())}</h2>'
         f'<img src="{escape(_relative_image(path, report_path))}" alt="{escape(path.stem)}"></section>'
@@ -63,6 +169,10 @@ def write_html_report(cfg: dict, figure_paths: list[Path] | None = None) -> Path
     th, td {{ border-bottom: 1px solid #e5ebef; padding: 8px 9px; text-align: left; }}
     th {{ color: #344955; }}
     .grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }}
+    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }}
+    .card {{ border: 1px solid #dce5ea; border-radius: 6px; padding: 12px; background: #fbfcfd; }}
+    .card span {{ display: block; color: #5d6b74; font-size: 12px; margin-bottom: 5px; }}
+    .card strong {{ display: block; color: #143642; font-size: 22px; }}
     .muted {{ color: #d6e4ea; }}
   </style>
 </head>
@@ -78,7 +188,8 @@ def write_html_report(cfg: dict, figure_paths: list[Path] | None = None) -> Path
     </section>
     <section>
       <h2>Metric Preview</h2>
-      {metric_preview}
+      {metric_cards}
+      {metric_sections}
     </section>
     <div class="grid">
       {image_html}
