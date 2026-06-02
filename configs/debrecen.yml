@@ -54,6 +54,11 @@ real_data:
   start_date:
   end_date:
   previous_run_days: [1, 2]
+  forecast_chunk_days: 31
+  request_timeout_seconds: 75
+  max_retries: 3
+  retry_backoff_seconds: 5
+  min_forecast_models: 1
   forecast_variables:
     - temperature_2m
     - dew_point_2m

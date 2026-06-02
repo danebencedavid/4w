@@ -25,6 +25,10 @@ The real-data pipeline uses a rolling lookback window from `configs/debrecen.yml
 By default it ends seven days before the workflow date to give the public archives time
 to settle.
 
+If the workflow fails in the **Build real-data report** step with an Open-Meteo timeout,
+rerun it first. The pipeline chunks Open-Meteo Previous Runs requests and retries each
+chunk, but public API availability can still briefly fluctuate.
+
 ## Local preview
 
 From the project root:

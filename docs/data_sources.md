@@ -56,6 +56,10 @@ For example, `temperature_2m_previous_day1` is treated as the forecast issued 24
 before valid time, and `temperature_2m_previous_day2` as the forecast issued 48 hours
 before valid time.
 
+Large historical requests are split into chunks by `real_data.forecast_chunk_days`.
+This is important for GitHub Actions, where occasional TLS/read timeouts from public
+weather APIs should be retried rather than failing the whole site build.
+
 Candidate models for Debrecen:
 
 - DWD ICON-EU

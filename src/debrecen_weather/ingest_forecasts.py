@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from time import sleep
 
@@ -90,6 +90,49 @@ def _previous_run_hourly_names(variables: list[str], previous_run_days: list[int
     ]
 
 
+def _date_chunks(start_date: str, end_date: str, chunk_days: int) -> list[tuple[str, str]]:
+    """Split an inclusive date range into smaller inclusive chunks."""
+    start = date.fromisoformat(start_date)
+    end = date.fromisoformat(end_date)
+    if chunk_days <= 0:
+        return [(start.isoformat(), end.isoformat())]
+
+    chunks = []
+    current = start
+    while current <= end:
+        chunk_end = min(end, current + timedelta(days=chunk_days - 1))
+        chunks.append((current.isoformat(), chunk_end.isoformat()))
+        current = chunk_end + timedelta(days=1)
+    return chunks
+
+
+def _get_with_retries(
+    url: str,
+    params: dict[str, object],
+    timeout: int,
+    max_retries: int,
+    backoff_seconds: float,
+) -> requests.Response:
+    """GET with conservative retry handling for public weather APIs."""
+    last_error: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                headers={"User-Agent": "debrecen-weather-calibration/0.1"},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return response
+        except requests.RequestException as exc:
+            last_error = exc
+            if attempt == max_retries:
+                break
+            sleep(backoff_seconds * attempt)
+    raise requests.RequestException(f"GET failed after {max_retries} attempts: {last_error}") from last_error
+
+
 def _previous_runs_response_to_frame(
     payload: dict,
     model: str,
@@ -135,29 +178,38 @@ def fetch_open_meteo_previous_runs(
     variables = list(real_cfg.get("forecast_variables", cfg["forecast"]["hourly_variables"]))
     previous_run_days = [int(day) for day in real_cfg.get("previous_run_days", [1, 2])]
     hourly_names = _previous_run_hourly_names(variables, previous_run_days)
+    timeout = int(real_cfg.get("request_timeout_seconds", 75))
+    max_retries = int(real_cfg.get("max_retries", 3))
+    backoff = float(real_cfg.get("retry_backoff_seconds", 5))
+    chunk_days = int(real_cfg.get("forecast_chunk_days", 31))
 
-    response = requests.get(
-        OPEN_METEO_PREVIOUS_RUNS_URL,
-        params={
-            "latitude": station["latitude"],
-            "longitude": station["longitude"],
-            "elevation": station["elevation_m"],
-            "start_date": start,
-            "end_date": end,
-            "hourly": ",".join(hourly_names),
-            "models": model,
-            "timezone": "UTC",
-            "wind_speed_unit": "ms",
-            "precipitation_unit": "mm",
-        },
-        headers={"User-Agent": "debrecen-weather-calibration/0.1"},
-        timeout=120,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if payload.get("error"):
-        raise ValueError(payload.get("reason", f"Open-Meteo returned an error for {model}"))
-    return _previous_runs_response_to_frame(payload, model, variables, previous_run_days)
+    frames = []
+    for chunk_start, chunk_end in _date_chunks(start, end, chunk_days):
+        response = _get_with_retries(
+            OPEN_METEO_PREVIOUS_RUNS_URL,
+            params={
+                "latitude": station["latitude"],
+                "longitude": station["longitude"],
+                "elevation": station["elevation_m"],
+                "start_date": chunk_start,
+                "end_date": chunk_end,
+                "hourly": ",".join(hourly_names),
+                "models": model,
+                "timezone": "UTC",
+                "wind_speed_unit": "ms",
+                "precipitation_unit": "mm",
+            },
+            timeout=timeout,
+            max_retries=max_retries,
+            backoff_seconds=backoff,
+        )
+        payload = response.json()
+        if payload.get("error"):
+            raise ValueError(payload.get("reason", f"Open-Meteo returned an error for {model}"))
+        frames.append(_previous_runs_response_to_frame(payload, model, variables, previous_run_days))
+        sleep(float(real_cfg.get("request_pause_seconds", 1.1)))
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=FORECAST_COLUMNS)
 
 
 def fetch_all_open_meteo_previous_runs(
@@ -181,12 +233,16 @@ def fetch_all_open_meteo_previous_runs(
                     end_date=end_date,
                 )
             )
-        except requests.HTTPError as exc:
+        except (requests.RequestException, ValueError) as exc:
             print(f"Skipping model {model}: {exc}")
-        except ValueError as exc:
-            print(f"Skipping model {model}: {exc}")
+    frames = [frame.dropna(axis=1, how="all") for frame in frames if not frame.empty]
     result = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=FORECAST_COLUMNS)
+    result = result.reindex(columns=FORECAST_COLUMNS)
     result = result.dropna(subset=["temperature_2m"], how="all")
+    models_fetched = result["model"].dropna().nunique() if not result.empty else 0
+    min_models = int(cfg.get("real_data", {}).get("min_forecast_models", 1))
+    if models_fetched < min_models:
+        raise RuntimeError(f"Fetched {models_fetched} forecast models, expected at least {min_models}")
     output = Path(output_path) if output_path else resolve_path(cfg, "forecasts_raw")
     ensure_parent(output)
     result.to_csv(output, index=False)

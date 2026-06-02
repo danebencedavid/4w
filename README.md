@@ -64,6 +64,10 @@ After pushing to GitHub, set **Settings > Pages > Build and deployment > Source*
 The generated static site lives in `site/` locally and is deployed as a Pages artifact
 in CI. See `docs/github_pages.md`.
 
+The GitHub Actions build uses chunked Open-Meteo requests with retry/backoff settings
+from `configs/debrecen.yml`, because the Previous Runs API can time out on large
+single-range requests from hosted runners.
+
 ## Project Structure
 
 ```text
