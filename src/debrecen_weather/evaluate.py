@@ -62,6 +62,21 @@ def probability_exceedance_from_quantiles(
     return pd.Series(probs, index=df.index)
 
 
+def probability_event_from_quantiles(
+    df: pd.DataFrame,
+    threshold: float,
+    quantiles: list[float],
+    direction: str = "above",
+) -> pd.Series:
+    """Approximate event probability for above/below threshold events."""
+    exceedance = probability_exceedance_from_quantiles(df, threshold, quantiles)
+    if direction == "above":
+        return exceedance
+    if direction == "below":
+        return 1.0 - exceedance
+    raise ValueError(f"Unsupported event direction: {direction!r}")
+
+
 def _metric_rows_for_group(
     frame: pd.DataFrame,
     group_label: dict[str, object],
@@ -186,18 +201,30 @@ def evaluate_events(
     predictions: pd.DataFrame,
     target: str,
     quantiles: list[float],
-    event_thresholds: dict[str, float],
+    event_thresholds: dict[str, float | dict[str, float | str]],
 ) -> pd.DataFrame:
     """Evaluate threshold exceedance events for the configured target."""
     y_col = f"observed_{target}"
     rows = []
-    for event_name, threshold in event_thresholds.items():
-        probability = probability_exceedance_from_quantiles(predictions, threshold, quantiles)
-        observed_event = predictions[y_col] >= threshold
+    for event_name, spec in event_thresholds.items():
+        if isinstance(spec, dict):
+            threshold = float(spec["threshold"])
+            direction = str(spec.get("direction", "above"))
+        else:
+            threshold = float(spec)
+            direction = "above"
+        probability = probability_event_from_quantiles(predictions, threshold, quantiles, direction=direction)
+        if direction == "below":
+            observed_event = predictions[y_col] <= threshold
+        elif direction == "above":
+            observed_event = predictions[y_col] >= threshold
+        else:
+            raise ValueError(f"Unsupported event direction: {direction!r}")
         frame = pd.DataFrame(
             {
                 "split": predictions["split"],
                 "event": event_name,
+                "direction": direction,
                 "observed_event": observed_event,
                 "probability": probability,
             }
@@ -207,6 +234,7 @@ def evaluate_events(
                 {
                     "split": split,
                     "event": event_name,
+                    "direction": direction,
                     "threshold": threshold,
                     "n": len(group),
                     "base_rate": float(group["observed_event"].mean()),
@@ -230,9 +258,9 @@ def evaluate_from_config(cfg: dict, target: str | None = None) -> pd.DataFrame:
 
     if target == "temperature_2m":
         event_thresholds = {
-            "frost": float(cfg["events"]["frost_c"]),
-            "warm_day": float(cfg["events"]["warm_day_c"]),
-            "hot_day": float(cfg["events"]["hot_day_c"]),
+            "frost": {"threshold": float(cfg["events"]["frost_c"]), "direction": "below"},
+            "warm_day": {"threshold": float(cfg["events"]["warm_day_c"]), "direction": "above"},
+            "hot_day": {"threshold": float(cfg["events"]["hot_day_c"]), "direction": "above"},
         }
         event_metrics = evaluate_events(
             predictions,

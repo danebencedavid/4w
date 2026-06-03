@@ -70,7 +70,7 @@ def _metric_section_html(metrics: pd.DataFrame) -> str:
     event_rows = metrics[metrics.get("forecast", "") == "event_probability"].copy()
     event_html = _clean_metric_table(
         event_rows,
-        ["split", "event", "threshold", "n", "base_rate", "brier_score", "mean_probability"],
+        ["split", "event", "direction", "threshold", "n", "base_rate", "brier_score", "mean_probability"],
     )
 
     return f"""
